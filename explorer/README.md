@@ -149,6 +149,17 @@ This writes the compiled assets to `../semantica/static/`. The Python server the
 | `EXPLORER_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated list of allowed CORS origins |
 | `EXPLORER_CORS_CREDENTIALS` | `false` | Set to `true` to allow credentialed cross-origin requests (only needed behind an authenticating reverse proxy) |
 
+## Interface languages
+
+The Explorer interface is available in English and Simplified Chinese. Use the
+language button at the bottom of the left navigation rail to switch languages.
+The selection is saved in browser storage and restored on the next visit; on a
+first visit, a Chinese browser locale selects Simplified Chinese automatically.
+
+Translation resources live in `src/i18n/resources/`. Keep the English and
+Chinese resource trees in sync, then run `npm run test:i18n` before submitting
+translation changes.
+
 ---
 
 ## Available scripts
@@ -173,6 +184,9 @@ npm run test:graph-store
 
 # Run the graph workspace display tests
 npm run test:graph-workspace
+
+# Verify translation parity and language switching
+npm run test:i18n
 ```
 
 ---
