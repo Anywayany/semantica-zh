@@ -42,7 +42,7 @@ keywords = [
   "knowledge-base", "entity-resolution", "w3c-prov", "audit-trail"
 ]
 
-# ---------------- CORE DEPENDENCIES (SAFE DEFAULT) ----------------
+# ---------------- CORE DEPENDENCIES (API-FIRST DEFAULT) ----------------
 dependencies = [
   "numpy>=2.0.2",
   "pandas>=1.3.0",
@@ -50,9 +50,6 @@ dependencies = [
   "scikit-learn>=1.7.2",
   "umap-learn>=0.5.12",
   "spacy>=3.4.0",
-  "transformers>=4.20.0",
-  "torch>=1.13.1",
-  "sentence-transformers>=2.2.0",
   "rdflib>=6.2.0",
   "networkx>=2.8.0",
   "matplotlib>=3.9.4",
@@ -72,9 +69,6 @@ dependencies = [
   "librosa>=0.9.0",
   "opencv-python>=4.13.0.92",
   "faiss-cpu>=1.7.0",
-  "fastembed>=0.2.0",
-  "onnxruntime>=1.20.1",
-  "tokenizers>=0.15.0",
   "pydantic>=2.13.4",
   "click>=8.4.2",
   "rich>=12.5.0",
@@ -130,10 +124,21 @@ db-all = [
   "semantica[db-snowflake,db-databricks,db-arrow]"
 ]
 
-# ---- Embedding / Models ----
+# ---- Local Embedding / Model Runtimes ----
 models-huggingface = [
   "transformers>=4.20.0",
-  "torch>=1.13.1"
+  "torch>=1.13.1",
+  "sentence-transformers>=2.2.0",
+  "tokenizers>=0.15.0"
+]
+
+models-fastembed = [
+  "fastembed>=0.2.0",
+  "onnxruntime>=1.20.1"
+]
+
+models-all = [
+  "semantica[models-huggingface,models-fastembed]"
 ]
 
 # ---- Graph Backends ----
@@ -242,8 +247,8 @@ explorer-lite = [
 
 # Everything (cross-platform — gpu excluded; install semantica[gpu] separately on Linux)
 all = [
-  "semantica[dev,viz,infra,cloud,monitoring,watch,llm-all,models-huggingface,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,ingest-parquet,ingest-arrow,shacl,explorer]",
-  "semantica[dev,viz,infra,cloud,monitoring,watch,llm-all,models-huggingface,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,ingest-parquet,ingest-arrow,shacl,agno]"
+  "semantica[dev,viz,infra,cloud,monitoring,watch,llm-all,models-all,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,ingest-parquet,ingest-arrow,shacl,explorer]",
+  "semantica[dev,viz,infra,cloud,monitoring,watch,llm-all,models-all,split-all,graph-all,tripletstore-oxigraph,vectorstore-all,parse-docling,ingest-parquet,ingest-arrow,shacl,agno]"
 ]
 
 # ---------------- ENTRYPOINTS ----------------
