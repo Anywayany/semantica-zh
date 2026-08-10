@@ -99,8 +99,6 @@ export function DecisionWorkspace() {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    setListLoading(true);
-    setError("");
     fetch("/api/decisions", { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -120,9 +118,8 @@ export function DecisionWorkspace() {
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setListLoading(false);
-      });
+    });
     return () => ctrl.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cancel any in-flight chain request when the workspace unmounts.

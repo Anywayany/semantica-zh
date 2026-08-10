@@ -171,7 +171,10 @@ export function buildGraphStructureCurveCache({
     return left.edgeId.localeCompare(right.edgeId);
   });
 
-  const curves = candidates.slice(0, maxCurves).map(({ rank: _rank, ...curve }) => curve);
+  const curves = candidates.slice(0, maxCurves).map(({ rank, ...curve }) => {
+    void rank;
+    return curve;
+  });
   return {
     cacheKey,
     curves,

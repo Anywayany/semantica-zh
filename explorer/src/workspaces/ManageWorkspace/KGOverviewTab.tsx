@@ -12,6 +12,7 @@ interface KGStats {
   edge_count: number;
   node_types?: Record<string, number>;
   edge_types?: Record<string, number>;
+  message?: string;
   [key: string]: unknown;
 }
 
@@ -25,6 +26,7 @@ interface NodeItem {
 interface NodeListResponse {
   nodes: NodeItem[];
   total: number;
+  message?: string;
 }
 
 function TypeBar({ label, count, total, color }: { label: string; count: number; total: number; color: string }) {
@@ -87,14 +89,14 @@ export function KGOverviewTab() {
       const statsData: KGStats = await statsRes.json();
       setStats(statsData);
       if (statsRes.status === 207) {
-        setError((statsData as any).message || "Warning: Partial success loading stats.");
+        setError(statsData.message || "Warning: Partial success loading stats.");
       }
 
       const nodesData: NodeListResponse = await nodesRes.json();
       const nodes = nodesData.nodes ?? [];
       setNodeTypeMap(buildTypeMap(nodes, "type"));
       if (nodesRes.status === 207) {
-        const nodesMessage = (nodesData as any).message || "Warning: Partial success loading nodes.";
+        const nodesMessage = nodesData.message || "Warning: Partial success loading nodes.";
         setError((prev) => (prev ? `${prev} ${nodesMessage}` : nodesMessage));
       }
 

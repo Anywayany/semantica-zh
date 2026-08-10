@@ -8,7 +8,7 @@
  * Any component can call logEvent() from anywhere (including non-React code).
  * React components subscribe via the useRegistry() hook.
  */
-import { useState, useEffect } from "react";
+import { useSyncExternalStore } from "react";
 
 export type RegistryEntryOp =
   | "import"
@@ -64,14 +64,13 @@ export function getRegistryEntries(): readonly RegistryEntry[] {
 }
 
 export function useRegistry(): readonly RegistryEntry[] {
-  const [snapshot, setSnapshot] = useState<readonly RegistryEntry[]>(_entries);
-  useEffect(() => {
-    // Sync any events that arrived between render and subscribe
-    setSnapshot(_entries);
-    _listeners.add(setSnapshot);
-    return () => {
-      _listeners.delete(setSnapshot);
-    };
-  }, []);
-  return snapshot;
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const listener: Listener = () => onStoreChange();
+      _listeners.add(listener);
+      return () => _listeners.delete(listener);
+    },
+    getRegistryEntries,
+    getRegistryEntries,
+  );
 }

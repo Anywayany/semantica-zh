@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 
 import { GRAPH_THEME, withAlpha } from "./graphTheme";
 import { GRAPH_LOAD_STAGE_SEQUENCE, createGraphLoadProgress, getGraphLoadStageLabel } from "./graphLoading";
@@ -175,58 +175,15 @@ export function GraphLoadingOverlay({
   visible: boolean;
   showGraphBehind: boolean;
 }) {
-  const [renderVisible, setRenderVisible] = useState(visible);
-  const [exiting, setExiting] = useState(false);
-  const [displayProgress, setDisplayProgress] = useState<GraphLoadProgress>(
-    progress ?? createGraphLoadProgress({
-      phase: "bootstrapping",
-      message: "Preparing graph session",
-      progressKind: "indeterminate",
-    }),
-  );
-  const exitTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (progress) {
-      setDisplayProgress(progress);
-    }
-  }, [progress]);
-
-  useEffect(() => {
-    if (visible) {
-      if (exitTimerRef.current !== null) {
-        window.clearTimeout(exitTimerRef.current);
-        exitTimerRef.current = null;
-      }
-      setRenderVisible(true);
-      setExiting(false);
-      return;
-    }
-
-    if (!renderVisible) {
-      return;
-    }
-
-    setExiting(true);
-    exitTimerRef.current = window.setTimeout(() => {
-      setRenderVisible(false);
-      setExiting(false);
-      exitTimerRef.current = null;
-    }, 220);
-
-    return () => {
-      if (exitTimerRef.current !== null) {
-        window.clearTimeout(exitTimerRef.current);
-        exitTimerRef.current = null;
-      }
-    };
-  }, [renderVisible, visible]);
-
-  if (!renderVisible) {
+  if (!visible) {
     return null;
   }
 
-  const activeProgress = progress ?? displayProgress;
+  const activeProgress = progress ?? createGraphLoadProgress({
+    phase: "bootstrapping",
+    message: "Preparing graph session",
+    progressKind: "indeterminate",
+  });
   const isLiveStage = activeProgress.phase === "stabilizing_layout" || activeProgress.showGraphBehind || showGraphBehind;
   const overlayBackground = isLiveStage
     ? "linear-gradient(180deg, rgba(1,4,9,0.04), rgba(1,4,9,0.18))"
@@ -240,7 +197,7 @@ export function GraphLoadingOverlay({
   return (
     <div
       className="graph-stage-loader"
-      data-exiting={exiting}
+      data-exiting={false}
       style={{ background: overlayBackground }}
     >
       <style>{LOADING_OVERLAY_CSS}</style>

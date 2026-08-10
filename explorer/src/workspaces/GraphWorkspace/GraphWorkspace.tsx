@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   Activity,
   Clock3,
@@ -105,6 +105,27 @@ type GraphToolbarGroup = {
   variant?: "cluster" | "segmented";
   items: GraphToolbarItem[];
 };
+
+type GraphSceneCommand =
+  | { type: "fitView" }
+  | { type: "focusNode"; nodeId: string }
+  | { type: "zoomIn" }
+  | { type: "zoomOut" };
+
+type GraphSceneCommandState = {
+  sequence: number;
+  command: GraphSceneCommand | null;
+};
+
+function queueGraphSceneCommand(
+  state: GraphSceneCommandState,
+  command: GraphSceneCommand,
+): GraphSceneCommandState {
+  return {
+    sequence: state.sequence + 1,
+    command,
+  };
+}
 
 type SemanticNeighborhoodResponse = {
   anchor_node: string;
@@ -1139,7 +1160,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     "temporal-panel": false,
   });
   const [activeDockPanelId, setActiveDockPanelId] = useState<string | null>(null);
-  const [pluginRuntimeVersion, setPluginRuntimeVersion] = useState(0);
+  const [pluginRuntime, setPluginRuntime] = useState<GraphSceneRuntime | null>(null);
   const [effectsState, setEffectsState] = useState<GraphEffectsState>(DEFAULT_EFFECTS_STATE);
   const [graphDiagnosticsState, setGraphDiagnosticsState] = useState<GraphRuntimeDiagnosticsSnapshot | null>(null);
   // Tracks the last accepted diagnostics outside React's state cycle, allowing
@@ -1172,10 +1193,13 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
   const debouncedTime = useDebounce(scrubberTime, 150);
   const prevActiveIdsRef = useRef<Set<string>>(new Set());
   const sceneRef = useRef<GraphSceneHandle>(null);
-  const lastExternalFocusTokenRef = useRef<number | undefined>(undefined);
-  const pluginRuntimeRef = useRef<GraphSceneRuntime | null>(null);
-  const appliedGraphSummarySignatureRef = useRef<string | null>(null);
-  const pluginInteractionStateRef = useRef<GraphInteractionState>({
+  const [sceneCommandState, dispatchSceneCommand] = useReducer(queueGraphSceneCommand, {
+    sequence: 0,
+    command: null,
+  });
+  const [lastExternalFocusToken, setLastExternalFocusToken] = useState<number | undefined>(undefined);
+  const [appliedGraphSummarySignature, setAppliedGraphSummarySignature] = useState<string | null>(null);
+  const [pluginInteractionState, setPluginInteractionState] = useState<GraphInteractionState>({
     hoveredNodeId: null,
     selectedNodeId: "",
     selectedEdgeId: "",
@@ -1197,14 +1221,24 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
 
   const applyGraphReadySummary = useCallback((graphSummary: GraphLoadSummary) => {
     const signature = getGraphSummarySignature(graphSummary);
-    if (appliedGraphSummarySignatureRef.current === signature) {
+    if (appliedGraphSummarySignature === signature) {
+      setGraphReady(true);
+      if (graphSummary.layoutReady) {
+        setLoadingProgress(null);
+      }
       return;
     }
 
-    appliedGraphSummarySignatureRef.current = signature;
+    setAppliedGraphSummarySignature(signature);
     setGraphReady(true);
     setGraphVersion((current) => current + 1);
     setIsLayoutRunning(!graphSummary.layoutReady);
+    setCollapsedNeighborhoodNodeIds([]);
+    setFocusedNodeId("");
+    setLastGroupedSelectedNodeId("");
+    setEgoModeEnabled(false);
+    setHeatmapEnabled(false);
+    setDistanceMode("off");
 
     if (graphSummary.layoutReady) {
       setLoadingProgress(null);
@@ -1223,29 +1257,44 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       layoutSource: graphSummary.layoutSource,
       layoutState: "bootstrapping",
     }));
-  }, []);
+  }, [appliedGraphSummarySignature]);
 
   const { data: summary, isLoading, isFetching } = useLoadGraph({
     enabled: true,
     onGraphReady: applyGraphReadySummary,
     onProgress: handleLoadProgress,
   });
-
-  useEffect(() => {
-    if (isLayoutRunning) {
-      return;
-    }
-
-    setLoadingProgress((current) => (current?.phase === "stabilizing_layout" ? null : current));
-  }, [isLayoutRunning]);
-
-  useEffect(() => {
-    if (!summary || graphReady) {
-      return;
-    }
-
+  const summarySignature = summary ? getGraphSummarySignature(summary) : null;
+  if (summary && !graphReady && appliedGraphSummarySignature !== summarySignature) {
     applyGraphReadySummary(summary);
-  }, [applyGraphReadySummary, graphReady, summary]);
+  }
+
+  useEffect(() => {
+    const command = sceneCommandState.command;
+    if (!command) {
+      return;
+    }
+
+    switch (command.type) {
+      case "fitView":
+        sceneRef.current?.fitView();
+        return;
+      case "focusNode":
+        sceneRef.current?.focusNode(command.nodeId);
+        return;
+      case "zoomIn":
+        sceneRef.current?.zoomIn();
+        return;
+      case "zoomOut":
+        sceneRef.current?.zoomOut();
+        return;
+    }
+  }, [sceneCommandState]);
+
+  const stopLayout = useCallback(() => {
+    setIsLayoutRunning(false);
+    setLoadingProgress((current) => (current?.phase === "stabilizing_layout" ? null : current));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1334,7 +1383,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       };
     }
 
-    const currentDisplayGraph = displayGraphCandidate ?? pluginRuntimeRef.current?.displayGraph ?? graph;
+    const currentDisplayGraph = displayGraphCandidate ?? graph;
     if (currentDisplayGraph.hasNode(nodeId)) {
       const displayAttrs = currentDisplayGraph.getNodeAttributes(nodeId) as NodeAttributes;
       const communityGroup = displayAttrs.properties?.__communityGroup as
@@ -1368,8 +1417,8 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
   }, []);
 
   const focusedSelectionResolution = useMemo(
-    () => resolveNodeIdForFocusedMode(selectedNodeId, pluginRuntimeRef.current?.displayGraph),
-    [pluginRuntimeVersion, resolveNodeIdForFocusedMode, selectedNodeId, viewMode],
+    () => resolveNodeIdForFocusedMode(selectedNodeId, pluginRuntime?.displayGraph),
+    [pluginRuntime, resolveNodeIdForFocusedMode, selectedNodeId],
   );
   const inspectableNodeId = focusedSelectionResolution.resolvedNodeId ?? "";
   const canActivateFocusedMode = Boolean(focusedSelectionResolution.resolvedNodeId);
@@ -1389,7 +1438,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
 
   const requestViewMode = useCallback((nextViewMode: GraphViewMode) => {
     if (nextViewMode === "focused") {
-      const resolution = resolveNodeIdForFocusedMode(selectedNodeId, pluginRuntimeRef.current?.displayGraph);
+      const resolution = resolveNodeIdForFocusedMode(selectedNodeId, pluginRuntime?.displayGraph);
       if (!resolution.resolvedNodeId) {
         return;
       }
@@ -1397,7 +1446,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       setFocusedNodeId(resolution.resolvedNodeId);
       setSelectedNodeId(resolution.resolvedNodeId);
       setViewMode("focused");
-      setIsLayoutRunning(false);
+      stopLayout();
       return;
     }
 
@@ -1431,6 +1480,9 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       }
       setViewMode("grouped");
       setIsLayoutRunning(true);
+      setEgoModeEnabled(false);
+      setHeatmapEnabled(false);
+      setDistanceMode("off");
       return;
     }
 
@@ -1448,8 +1500,10 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     groupedViewAvailable,
     groupedViewReason,
     lastGroupedSelectedNodeId,
+    pluginRuntime,
     resolveNodeIdForFocusedMode,
     selectedNodeId,
+    stopLayout,
   ]);
 
   const focusNode = useCallback((nodeId: string) => {
@@ -1462,7 +1516,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       return;
     }
 
-    const currentDisplayGraph = pluginRuntimeRef.current?.displayGraph ?? graph;
+    const currentDisplayGraph = pluginRuntime?.displayGraph ?? graph;
     const nextSelectedNodeId = nodeId;
 
     if (!graph.hasNode(nodeId) && currentDisplayGraph.hasNode(nodeId)) {
@@ -1476,26 +1530,39 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     setSearchError("");
     if (viewMode === "focused" && graph.hasNode(nextSelectedNodeId)) {
       setFocusedNodeId(nextSelectedNodeId);
-      setIsLayoutRunning(false);
+      stopLayout();
     }
-  }, [viewMode]);  // Note: ego/heatmap/distanceMode effects re-run automatically when selectedNodeId changes
+    setEgoModeEnabled(false);
+    setHeatmapEnabled(false);
+    setDistanceMode("off");
+  }, [pluginRuntime, stopLayout, viewMode]);
+
+  const canApplyExternalFocus = Boolean(
+    externalFocusNodeId
+    && externalFocusToken != null
+    && graphReady
+    && graph.hasNode(externalFocusNodeId),
+  );
+  if (canApplyExternalFocus && lastExternalFocusToken !== externalFocusToken) {
+    setLastExternalFocusToken(externalFocusToken);
+    setViewMode("full");
+    setFocusedNodeId("");
+    setSelectedNodeId(externalFocusNodeId ?? "");
+    setSelectedEdgeId("");
+    setEgoModeEnabled(false);
+    setHeatmapEnabled(false);
+    setDistanceMode("off");
+  }
 
   useEffect(() => {
-    if (!externalFocusNodeId || externalFocusToken == null) return;
-    if (lastExternalFocusTokenRef.current === externalFocusToken) return;
-    if (!graphReady || !graph.hasNode(externalFocusNodeId)) return;
-
-    lastExternalFocusTokenRef.current = externalFocusToken;
-    // Set state directly instead of going through focusNode(), which captures
-    // a stale viewMode in its closure. setViewMode is called first so the node
-    // is visible in the full graph before the scene pans to it.
-    setViewMode("full");
-    setSelectedNodeId(externalFocusNodeId);
-    setSelectedEdgeId("");
-    window.setTimeout(() => {
+    if (!canApplyExternalFocus || lastExternalFocusToken !== externalFocusToken || !externalFocusNodeId) {
+      return;
+    }
+    const focusTimer = window.setTimeout(() => {
       sceneRef.current?.focusNode(externalFocusNodeId);
     }, 0);
-  }, [externalFocusNodeId, externalFocusToken, graphReady]);
+    return () => window.clearTimeout(focusTimer);
+  }, [canApplyExternalFocus, externalFocusNodeId, externalFocusToken, lastExternalFocusToken]);
 
   const handleEdgeSelect = useCallback((edgeId: string) => {
     setSelectedEdgeId(edgeId);
@@ -1646,12 +1713,6 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     };
   }, []);
 
-  useEffect(() => {
-    setCollapsedNeighborhoodNodeIds([]);
-    setFocusedNodeId("");
-    setLastGroupedSelectedNodeId("");
-  }, [summary?.edgeCount, summary?.nodeCount]);
-
   const activeDistanceMode: GraphDistanceVisualMode = egoModeEnabled
     ? "ego"
     : heatmapEnabled
@@ -1690,42 +1751,11 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
   );
 
   useEffect(() => {
-    if (viewMode === "full") {
-      return;
-    }
-    setEgoModeEnabled(false);
-    setHeatmapEnabled(false);
-    setDistanceMode("off");
-  }, [viewMode]);
-
-  useEffect(() => {
-    if (activeDistanceMode === "off" || !selectedNodeId || !graph.hasNode(selectedNodeId)) {
-      setEgoModeEnabled(false);
-      setHeatmapEnabled(false);
-      setDistanceMode("off");
-    }
-  }, [activeDistanceMode, graphVersion, selectedNodeId]);
-
-  useEffect(() => {
     if (distanceMode !== "semantic" || !distanceAnchorNodeId) {
-      setSemanticDistanceState({
-        anchorNodeId: distanceAnchorNodeId || null,
-        scores: EMPTY_DISTANCE_RECORD,
-        count: 0,
-        status: distanceMode === "semantic" ? "unavailable" : "idle",
-        error: distanceMode === "semantic" ? "Select a Full Graph node to load semantic distance." : null,
-      });
       return;
     }
 
     let cancelled = false;
-    setSemanticDistanceState({
-      anchorNodeId: distanceAnchorNodeId,
-      scores: EMPTY_DISTANCE_RECORD,
-      count: 0,
-      status: "loading",
-      error: null,
-    });
 
     const loadSemanticNeighborhood = async () => {
       try {
@@ -1974,25 +2004,20 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     ],
   );
   const displayMeta = displayResult.meta;
-  useEffect(() => {
-    if (viewMode === "grouped" && !groupedViewAvailable) {
-      debugGraphWorkspace("grouped-view-reset-to-full", {
-        reason: groupedViewReason,
-        graphVersion,
-      });
-      setViewMode("full");
-      setFocusedNodeId("");
-      setSelectedNodeId((currentSelectedNodeId) => (
-        currentSelectedNodeId && graph.hasNode(currentSelectedNodeId) ? currentSelectedNodeId : ""
-      ));
-    }
-  }, [graphVersion, groupedViewAvailable, groupedViewReason, viewMode]);
-  useEffect(() => {
-    if (viewMode === "focused" && (!focusedNodeId || !graph.hasNode(focusedNodeId))) {
-      setViewMode("full");
-      setFocusedNodeId("");
-    }
-  }, [focusedNodeId, graphVersion, viewMode]);
+  if (viewMode === "grouped" && !groupedViewAvailable) {
+    debugGraphWorkspace("grouped-view-reset-to-full", {
+      reason: groupedViewReason,
+      graphVersion,
+    });
+    setViewMode("full");
+    setFocusedNodeId("");
+    setSelectedNodeId((currentSelectedNodeId) => (
+      currentSelectedNodeId && graph.hasNode(currentSelectedNodeId) ? currentSelectedNodeId : ""
+    ));
+  } else if (viewMode === "focused" && (!focusedNodeId || !graph.hasNode(focusedNodeId))) {
+    setViewMode("full");
+    setFocusedNodeId("");
+  }
   const previousDisplayGraphRef = useRef(displayResult.graph);
   const previousDisplayStateRef = useRef(displayState);
   useEffect(() => {
@@ -2148,10 +2173,10 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
   const handlePluginAction = useCallback((action: GraphPluginActionRequest) => {
     switch (action.type) {
       case "fitView":
-        sceneRef.current?.fitView();
+        dispatchSceneCommand({ type: "fitView" });
         return;
       case "focusNode":
-        sceneRef.current?.focusNode(action.nodeId);
+        dispatchSceneCommand({ type: "focusNode", nodeId: action.nodeId });
         return;
       case "selectNode":
         focusNode(action.nodeId);
@@ -2217,7 +2242,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     }
 
     return {
-      interactionState: pluginInteractionStateRef.current,
+      interactionState: pluginInteractionState,
       activePluginIds: activePlugins.map((plugin) => plugin.id),
       openPanelIds: Object.entries(pluginPanelState)
         .filter(([, isOpen]) => isOpen)
@@ -2227,20 +2252,14 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       distanceVisual: graphDiagnosticsState.distanceVisual,
       effectAvailability: graphDiagnosticsState.effectAvailability,
     };
-  }, [activePlugins, effectsState, graphDiagnosticsState, pluginPanelState]);
+  }, [activePlugins, effectsState, graphDiagnosticsState, pluginInteractionState, pluginPanelState]);
 
   const pluginContext = useMemo<GraphPluginContext>(() => ({
-    get scene() {
-      return pluginRuntimeRef.current;
-    },
-    get graph() {
-      return graph;
-    },
-    get displayGraph() {
-      return pluginRuntimeRef.current?.displayGraph ?? graph;
-    },
+    scene: pluginRuntime,
+    graph,
+    displayGraph: pluginRuntime?.displayGraph ?? graph,
     theme: GRAPH_THEME,
-    getInteractionState: () => pluginInteractionStateRef.current,
+    getInteractionState: () => pluginInteractionState,
     getSelectedNodeState: () => selectedNodeState,
     getInspectorState: () => ({
       selectedNodeId: selectedNodeId || null,
@@ -2262,21 +2281,22 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
     graphSummary,
     handlePluginAction,
     pluginPanelState,
+    pluginInteractionState,
+    pluginRuntime,
     selectedNodeId,
     selectedNodeState,
     temporalState,
   ]);
 
   const handleSceneRuntimeChange = useCallback((runtime: GraphSceneRuntime | null) => {
-    pluginRuntimeRef.current = runtime;
+    setPluginRuntime(runtime);
     if (!runtime) {
       setGraphAnalyticsState(null);
     }
-    setPluginRuntimeVersion((version) => version + 1);
   }, []);
 
   const handleInteractionStateChange = useCallback((interactionState: GraphInteractionState) => {
-    pluginInteractionStateRef.current = interactionState;
+    setPluginInteractionState(interactionState);
     for (const plugin of activePlugins) {
       try {
         plugin.onStateChange(pluginContext, interactionState);
@@ -2347,7 +2367,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
   }, []);
 
   useEffect(() => {
-    if (!pluginRuntimeRef.current) {
+    if (!pluginRuntime) {
       return;
     }
 
@@ -2370,7 +2390,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
         }
       }
     };
-  }, [activePlugins, pluginContext, pluginRuntimeVersion]);
+  }, [activePlugins, pluginContext, pluginRuntime]);
 
   const pluginToolbarItems = useMemo<GraphPluginToolbarItem[]>(
     () => pluginRegistry.map((entry) => ({
@@ -2483,7 +2503,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       ariaLabel: "Zoom in",
       icon: ZoomIn,
       compact: true,
-      onClick: () => sceneRef.current?.zoomIn(),
+      onClick: () => dispatchSceneCommand({ type: "zoomIn" }),
     },
     {
       id: "zoom-out",
@@ -2492,7 +2512,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       ariaLabel: "Zoom out",
       icon: ZoomOut,
       compact: true,
-      onClick: () => sceneRef.current?.zoomOut(),
+      onClick: () => dispatchSceneCommand({ type: "zoomOut" }),
     },
     {
       id: "fit-view",
@@ -2501,7 +2521,7 @@ export function GraphWorkspace({ externalFocusNodeId, externalFocusToken }: Grap
       ariaLabel: "Fit view",
       icon: Maximize2,
       compact: true,
-      onClick: () => sceneRef.current?.fitView(),
+      onClick: () => dispatchSceneCommand({ type: "fitView" }),
     },
   ], []);
 

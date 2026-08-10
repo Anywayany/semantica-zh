@@ -1,11 +1,11 @@
 import type { CSSProperties } from "react";
 
-import type { GraphPlugin } from "./types";
+import type { GraphPlugin, GraphPluginContext } from "./types";
 
 const NEIGHBORHOOD_PANEL_ID = "neighborhood-panel";
 const MAX_NEIGHBORS = 10;
 
-function maxWeightBetween(graphRef: any, sourceId: string, targetId: string): number {
+function maxWeightBetween(graphRef: GraphPluginContext["graph"], sourceId: string, targetId: string): number {
   let weight = 0;
   graphRef.forEachDirectedEdge(sourceId, targetId, (_edgeId: string, attrs: { weight?: number }) => {
     weight = Math.max(weight, Number(attrs.weight ?? 0));

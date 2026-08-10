@@ -53,7 +53,7 @@ export interface NodeAttributes {
   content: string;
   valid_from?: string | null;
   valid_until?: string | null;
-  properties: Record<string, any>;
+  properties: Record<string, unknown>;
 }
 
 export interface EdgeAttributes {
@@ -90,7 +90,7 @@ export interface EdgeAttributes {
  
   edgeType: string;
   weight: number;
-  properties: Record<string, any>;
+  properties: Record<string, unknown>;
 }
 
 function normalizeParallelMetadataForPair(source: string, target: string): void {

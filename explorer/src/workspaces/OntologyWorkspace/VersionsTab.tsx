@@ -19,7 +19,14 @@ interface VersionEntry {
   state: "draft" | "published";
   author: string;
   date: string;
-  diff_summary: Record<string, any>;
+  diff_summary: Record<string, unknown>;
+}
+
+interface ProposalComment {
+  id: string;
+  author: string;
+  text: string;
+  created_at?: string;
 }
 
 interface Proposal {
@@ -30,11 +37,11 @@ interface Proposal {
   author: string;
   reviewer: string | null;
   state: "draft" | "proposed" | "approved" | "published" | "rejected";
-  impact_analysis: Record<string, any>;
-  shacl_validation: Record<string, any>;
+  impact_analysis: Record<string, unknown>;
+  shacl_validation: Record<string, unknown>;
   created_at: string;
   updated_at: string;
-  comments: Record<string, any>[];
+  comments: ProposalComment[];
 }
 
 export function VersionsTab() {
@@ -45,7 +52,7 @@ export function VersionsTab() {
   const [showProposalModal, setShowProposalModal] = useState(false);
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [comparePair, setComparePair] = useState<{ v1: string; v2: string } | null>(null);
-  const [compareResult, setCompareResult] = useState<Record<string, any> | null>(null);
+  const [compareResult, setCompareResult] = useState<Record<string, unknown> | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 

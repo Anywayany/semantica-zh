@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { Link2 } from "lucide-react";
 import { ReactFlow, Background, Controls } from "@xyflow/react";
+import type { Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 const THEME_CSS = `
@@ -28,9 +29,29 @@ const THEME_CSS = `
   .react-flow__controls-button:hover { background: rgba(74,163,255,0.1); color: var(--ws-text, #ddeeff); }
 `;
 
+interface LineageApiNode {
+  id: string;
+  label: string;
+  prov_type: string;
+  parent_id: string;
+}
+
+interface LineageApiEdge {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
+}
+
+interface LineageResponse {
+  nodes: LineageApiNode[];
+  edges: LineageApiEdge[];
+  message?: string;
+}
+
 export function LineageDiagram() {
-  const [nodes, setNodes] = useState<any[]>([]);
-  const [edges, setEdges] = useState<any[]>([]);
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [searchId, setSearchId] = useState("");
   const [activeId, setActiveId] = useState("");
   const [error, setError] = useState("");
@@ -64,10 +85,10 @@ export function LineageDiagram() {
     let ignore = false;
     if (!activeId) return;
 
-    const xLanes = [
-      { id: "group_agent", type: "group", position: { x: 50, y: 50 }, style: { width: 800, height: 120 } },
-      { id: "group_activity", type: "group", position: { x: 50, y: 200 }, style: { width: 800, height: 120 } },
-      { id: "group_entity", type: "group", position: { x: 50, y: 350 }, style: { width: 800, height: 120 } }
+    const xLanes: Node[] = [
+      { id: "group_agent", type: "group", data: {}, position: { x: 50, y: 50 }, style: { width: 800, height: 120 } },
+      { id: "group_activity", type: "group", data: {}, position: { x: 50, y: 200 }, style: { width: 800, height: 120 } },
+      { id: "group_entity", type: "group", data: {}, position: { x: 50, y: 350 }, style: { width: 800, height: 120 } }
     ];
 
     const fetchLineage = async () => {
@@ -85,14 +106,14 @@ export function LineageDiagram() {
           throw new Error("Backend returned non-JSON response (likely an HTML fallback).");
         }
 
-        const data = await res.json();
+        const data = await res.json() as LineageResponse;
         if (res.status === 207) {
           setError(data.message || "Warning: Partial success loading lineage.");
         }
 
         const counters: Record<string, number> = { "group_agent": 0, "group_activity": 0, "group_entity": 0 };
 
-        const mappedNodes = data.nodes.map((n: any) => {
+        const mappedNodes: Node[] = data.nodes.map((n) => {
           const c = counters[n.parent_id] || 0;
           counters[n.parent_id] = c + 1;
           return {
@@ -100,12 +121,12 @@ export function LineageDiagram() {
             data: { label: n.label + "\n(" + n.prov_type + ")" },
             position: { x: 50 + c * 180, y: 30 },
             parentId: n.parent_id,
-            extent: "parent",
+            extent: "parent" as const,
             type: "default"
           };
         });
 
-        const mappedEdges = data.edges.map((e: any) => ({
+        const mappedEdges: Edge[] = data.edges.map((e) => ({
           id: e.id,
           source: e.source,
           target: e.target,

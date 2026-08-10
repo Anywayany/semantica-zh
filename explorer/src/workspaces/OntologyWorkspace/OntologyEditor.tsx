@@ -68,15 +68,15 @@ const classNodeSub: React.CSSProperties = {
 interface DraftDiff {
   added_classes: string[];
   removed_classes: string[];
-  modified_classes: Record<string, Record<string, any>>;
+  modified_classes: Record<string, Record<string, unknown>>;
   added_properties: string[];
   removed_properties: string[];
-  modified_properties: Record<string, Record<string, any>>;
-  added_restrictions: Record<string, any>[];
-  removed_restrictions: Record<string, any>[];
-  added_axioms: Record<string, any>[];
-  removed_axioms: Record<string, any>[];
-  annotation_changes: Record<string, Record<string, any>>;
+  modified_properties: Record<string, Record<string, unknown>>;
+  added_restrictions: Record<string, unknown>[];
+  removed_restrictions: Record<string, unknown>[];
+  added_axioms: Record<string, unknown>[];
+  removed_axioms: Record<string, unknown>[];
+  annotation_changes: Record<string, Record<string, unknown>>;
 }
 
 interface RegistryEntry {

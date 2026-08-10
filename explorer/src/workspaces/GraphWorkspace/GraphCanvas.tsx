@@ -280,43 +280,13 @@ function collectSelectionContextNodeIds(
   return Array.from(new Set([resolvedNodeId, ...neighborIds]));
 }
 
-function computeGraphSpaceBounds(
-  displayGraph: GraphSceneGraph,
-  nodeIds: string[],
-): { minX: number; maxX: number; minY: number; maxY: number; count: number } | null {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  let count = 0;
-
-  nodeIds.forEach((nodeId) => {
-    if (!displayGraph.hasNode(nodeId)) {
-      return;
-    }
-
-    const attrs = displayGraph.getNodeAttributes(nodeId) as NodeAttributes;
-    const x = Number(attrs.x);
-    const y = Number(attrs.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      return;
-    }
-
-    minX = Math.min(minX, x);
-    maxX = Math.max(maxX, x);
-    minY = Math.min(minY, y);
-    maxY = Math.max(maxY, y);
-    count += 1;
-  });
-
-  if (count === 0) {
-    return null;
-  }
-
-  return { minX, maxX, minY, maxY, count };
-}
-
-type GraphSpaceBounds = NonNullable<ReturnType<typeof computeGraphSpaceBounds>>;
+type GraphSpaceBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  count: number;
+};
 type SigmaCustomBBox = {
   x: [number, number];
   y: [number, number];

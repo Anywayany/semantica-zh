@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- this TSX module exports a graph plugin descriptor */
 import type { CSSProperties } from "react";
 
 import type {

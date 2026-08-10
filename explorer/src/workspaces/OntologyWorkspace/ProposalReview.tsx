@@ -13,6 +13,20 @@ import {
   Edit,
 } from "lucide-react";
 
+interface ImpactAnalysis extends Record<string, unknown> {
+  class_adds?: number;
+  class_removals?: number;
+  property_changes?: number;
+  restriction_changes?: number;
+}
+
+interface ProposalComment {
+  id: string;
+  author: string;
+  text: string;
+  created_at: string;
+}
+
 interface Proposal {
   proposal_id: string;
   draft_id: string;
@@ -21,17 +35,17 @@ interface Proposal {
   author: string;
   reviewer: string | null;
   state: "draft" | "proposed" | "approved" | "published" | "rejected";
-  impact_analysis: Record<string, any>;
-  shacl_validation: Record<string, any>;
+  impact_analysis: ImpactAnalysis;
+  shacl_validation: Record<string, unknown>;
   created_at: string;
   updated_at: string;
-  comments: Record<string, any>[];
+  comments: ProposalComment[];
 }
 
 interface DiffChange {
   type: "added" | "removed" | "modified";
   element: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 export function ProposalReview({ proposalId }: { proposalId: string }) {
@@ -45,16 +59,16 @@ export function ProposalReview({ proposalId }: { proposalId: string }) {
 
     // Generate diff from impact analysis
     if (prop.impact_analysis) {
-      if (prop.impact_analysis.class_adds > 0) {
+      if ((prop.impact_analysis.class_adds ?? 0) > 0) {
         changes.push({ type: "added", element: `Classes (${prop.impact_analysis.class_adds})` });
       }
-      if (prop.impact_analysis.class_removals > 0) {
+      if ((prop.impact_analysis.class_removals ?? 0) > 0) {
         changes.push({ type: "removed", element: `Classes (${prop.impact_analysis.class_removals})` });
       }
-      if (prop.impact_analysis.property_changes > 0) {
+      if ((prop.impact_analysis.property_changes ?? 0) > 0) {
         changes.push({ type: "modified", element: `Properties (${prop.impact_analysis.property_changes})` });
       }
-      if (prop.impact_analysis.restriction_changes > 0) {
+      if ((prop.impact_analysis.restriction_changes ?? 0) > 0) {
         changes.push({ type: "modified", element: `Restrictions (${prop.impact_analysis.restriction_changes})` });
       }
     }
