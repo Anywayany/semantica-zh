@@ -1,0 +1,76 @@
+[
+  {
+    "id": "business-direct",
+    "profile": "business",
+    "text": "张伟创立星河科技有限公司。星河科技有限公司位于北京市。",
+    "entities": [
+      ["张伟", "PERSON"],
+      ["星河科技有限公司", "ORG"],
+      ["北京市", "GPE"]
+    ],
+    "relations": [
+      ["张伟", "founded", "星河科技有限公司"],
+      ["星河科技有限公司", "located_in", "北京市"]
+    ]
+  },
+  {
+    "id": "alias-and-coreference",
+    "profile": "business",
+    "text": "星河科技有限公司（简称星河科技）由张伟创立。该公司位于北京。",
+    "entities": [
+      ["星河科技有限公司", "ORG"],
+      ["张伟", "PERSON"],
+      ["北京", "GPE"]
+    ],
+    "relations": [
+      ["张伟", "founded", "星河科技有限公司"],
+      ["星河科技有限公司", "located_in", "北京"]
+    ]
+  },
+  {
+    "id": "no-cooccurrence-edge",
+    "profile": "business",
+    "text": "张伟先生参加会议，星河科技有限公司发布报告。",
+    "entities": [
+      ["张伟", "PERSON"],
+      ["星河科技有限公司", "ORG"]
+    ],
+    "relations": []
+  },
+  {
+    "id": "passive-acquisition",
+    "profile": "business",
+    "text": "远航集团被星河科技有限公司收购。",
+    "entities": [
+      ["远航集团", "ORG"],
+      ["星河科技有限公司", "ORG"]
+    ],
+    "relations": [
+      ["星河科技有限公司", "acquired", "远航集团"]
+    ]
+  },
+  {
+    "id": "employment",
+    "profile": "business",
+    "text": "李娜加入远航集团。",
+    "entities": [
+      ["李娜", "PERSON"],
+      ["远航集团", "ORG"]
+    ],
+    "relations": [
+      ["李娜", "works_for", "远航集团"]
+    ]
+  },
+  {
+    "id": "investment",
+    "profile": "business",
+    "text": "远航集团投资星河科技有限公司。",
+    "entities": [
+      ["远航集团", "ORG"],
+      ["星河科技有限公司", "ORG"]
+    ],
+    "relations": [
+      ["远航集团", "invested_in", "星河科技有限公司"]
+    ]
+  }
+]

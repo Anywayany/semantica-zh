@@ -240,6 +240,7 @@ class BaseProvider:
         Generate structured output validated against a Pydantic schema.
         Uses instructor if available and supported for the provider, otherwise falls back to a repair loop.
         """
+        fallback_to_manual = kwargs.pop("fallback_to_manual", True)
         provider_name = self.__class__.__name__
         
         # Try using instructor first if available
@@ -350,31 +351,9 @@ class BaseProvider:
                         except ImportError:
                             pass
                 elif provider_name == "DeepSeekProvider" and self.client:
-                    # Try from_provider for DeepSeek
-                    if hasattr(instructor, "from_provider"):
-                        try:
-                            client = instructor.from_provider(
-                                provider=f"deepseek/{kwargs.get('model', self.model)}",
-                                api_key=self.api_key
-                            )
-                        except Exception:
-                            client = None
-
-                    if not client:
-                        # DeepSeek is OpenAI compatible
-                        try:
-                            from openai import OpenAI
-                            if isinstance(self.client, OpenAI):
-                                 client = instructor.from_openai(self.client, mode=instructor.Mode.JSON)
-                            else:
-                                 # Try creating fresh client
-                                 ds_client = OpenAI(
-                                     api_key=self.api_key, 
-                                     base_url="https://api.deepseek.com"
-                                 )
-                                 client = instructor.from_openai(ds_client, mode=instructor.Mode.JSON)
-                        except Exception:
-                            pass
+                    # Reuse the request-scoped OpenAI-compatible client so entity
+                    # and relation extraction share the same HTTP connection.
+                    client = instructor.from_openai(self.client, mode=instructor.Mode.JSON)
 
                 # Global LiteLLM support - if litellm is passed in kwargs or config
                 if not client and (kwargs.get("litellm") or self.config.get("litellm")):
@@ -398,7 +377,8 @@ class BaseProvider:
                         "temperature": kwargs.get("temperature") if kwargs.get("temperature") is not None else 0.1,
                     }
                     self._add_if_set(create_kwargs, kwargs, "max_tokens", "max_completion_tokens",
-                                     "top_p", "frequency_penalty", "presence_penalty", "seed", "stop", "logit_bias", "user", "top_k")
+                                     "top_p", "frequency_penalty", "presence_penalty", "seed", "stop", "logit_bias", "user", "top_k",
+                                     "response_format", "extra_body", "reasoning_effort")
 
                     if provider_name == "GroqProvider":
                         create_kwargs["response_format"] = {"type": "json_object"}
@@ -445,10 +425,13 @@ class BaseProvider:
                     return response
             except Exception as e:
                 self.logger.warning(
-                    "Instructor generation failed (%s), falling back to manual repair loop.",
+                    "Instructor generation failed (%s).",
                     e,
                     exc_info=True,
                 )
+                if not fallback_to_manual:
+                    raise ProcessingError(f"Typed provider request failed: {e}") from e
+                self.logger.warning("Falling back to manual typed-output repair loop.")
 
         # Fallback: Manual repair loop
         last_error = None
@@ -1013,12 +996,20 @@ class OllamaProvider(BaseProvider):
 
 
 class DeepSeekProvider(BaseProvider):
-    def __init__(self, api_key: Optional[str] = None, model: str = "deepseek-chat", **kwargs):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "deepseek-v4-flash",
+        timeout: Optional[Any] = None,
+        max_retries: Optional[int] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.api_key = api_key or config.get_api_key("deepseek")
         self.base_url = "https://api.deepseek.com/v1"
         self.model = model
-        self.base_url = "https://api.deepseek.com/v1"
+        self.timeout = timeout
+        self.max_retries = max_retries
         self.client = None
         self._init_client()
 
@@ -1027,7 +1018,15 @@ class DeepSeekProvider(BaseProvider):
             from openai import OpenAI
 
             if self.api_key:
-                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+                init_kwargs: Dict[str, Any] = {
+                    "api_key": self.api_key,
+                    "base_url": self.base_url,
+                }
+                if self.timeout is not None:
+                    init_kwargs["timeout"] = self.timeout
+                if self.max_retries is not None:
+                    init_kwargs["max_retries"] = self.max_retries
+                self.client = OpenAI(**init_kwargs)
         except (ImportError, OSError):
             self.client = None
             self.logger.warning(
@@ -1045,7 +1044,15 @@ class DeepSeekProvider(BaseProvider):
             "model": kwargs.get("model", self.model),
             "messages": [{"role": "user", "content": prompt}],
         }
-        self._add_if_set(create_kwargs, kwargs, "temperature", "max_tokens")
+        self._add_if_set(
+            create_kwargs,
+            kwargs,
+            "temperature",
+            "max_tokens",
+            "response_format",
+            "extra_body",
+            "reasoning_effort",
+        )
 
         response = self.client.chat.completions.create(**create_kwargs)
         return response.choices[0].message.content
@@ -1058,8 +1065,16 @@ class DeepSeekProvider(BaseProvider):
         create_kwargs = {
             "model": kwargs.get("model", self.model),
             "messages": [{"role": "user", "content": prompt}],
+            "response_format": kwargs.get("response_format", {"type": "json_object"}),
         }
-        self._add_if_set(create_kwargs, kwargs, "temperature", "max_tokens")
+        self._add_if_set(
+            create_kwargs,
+            kwargs,
+            "temperature",
+            "max_tokens",
+            "extra_body",
+            "reasoning_effort",
+        )
 
         response = self.client.chat.completions.create(**create_kwargs)
         try:

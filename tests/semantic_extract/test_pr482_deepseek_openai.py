@@ -32,6 +32,11 @@ class TestDeepSeekProviderInit(unittest.TestCase):
             provider = self.DeepSeekProvider(api_key="fake-key")
         self.assertIn("/v1", provider.base_url, "base_url must include /v1")
 
+    def test_default_model_is_v4_flash(self):
+        with patch.object(self.DeepSeekProvider, "_init_client", return_value=None):
+            provider = self.DeepSeekProvider(api_key="fake-key")
+        self.assertEqual(provider.model, "deepseek-v4-flash")
+
     def test_init_client_uses_openai_not_deepseek(self):
         """_init_client must import openai.OpenAI, not deepseek.Client."""
         mock_openai_cls = MagicMock()
@@ -148,6 +153,22 @@ class TestDeepSeekProviderGenerate(unittest.TestCase):
 
         result = provider.generate_structured("test prompt")
         self.assertEqual(result, {"key": "value"})
+        kwargs = provider.client.chat.completions.create.call_args[1]
+        self.assertEqual(kwargs["response_format"], {"type": "json_object"})
+
+    def test_generate_forwards_v4_thinking_configuration(self):
+        provider = self._make_provider()
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "ok"
+        provider.client.chat.completions.create.return_value = mock_resp
+
+        provider.generate(
+            "prompt",
+            model="deepseek-v4-flash",
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        kwargs = provider.client.chat.completions.create.call_args[1]
+        self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
 
     def test_generate_raises_without_client(self):
         from semantica.semantic_extract.providers import DeepSeekProvider, ProcessingError

@@ -925,6 +925,10 @@ def extract_entities_llm(
             raise ProcessingError(error_msg)
         return []
 
+    # A request-scoped provider lets callers reuse one HTTP connection without
+    # putting session credentials into the global provider pool.
+    provider_instance = kwargs.pop("provider_instance", None)
+
     # Pass api_key if provided in kwargs (needed for all providers)
     provider_kwargs = kwargs.copy()
     if "api_key" not in provider_kwargs or not provider_kwargs["api_key"]:
@@ -937,7 +941,7 @@ def extract_entities_llm(
 
     # 2. PROVIDER VALIDATION
     try:
-        llm = create_provider(provider, model=model, **provider_kwargs)
+        llm = provider_instance or create_provider(provider, model=model, **provider_kwargs)
         if not llm.is_available():
             error_msg = f"{provider} provider not available. Check API key and dependencies."
             logger.error(error_msg)
@@ -970,6 +974,7 @@ def extract_entities_llm(
             model=model, 
             silent_fail=silent_fail,
             max_text_length=max_text_length,
+            provider_instance=provider_instance,
             **kwargs
         )
 
@@ -1066,6 +1071,7 @@ Text to extract from:
                     model=model, 
                     silent_fail=silent_fail, 
                     max_text_length=new_max,
+                    provider_instance=provider_instance,
                     **kwargs
                 )
 
@@ -1723,6 +1729,9 @@ def extract_relations_llm(
             raise ProcessingError(error_msg)
         return []
 
+    # Reuse a request-scoped provider when supplied by the Explorer.
+    provider_instance = kwargs.pop("provider_instance", None)
+
     # Pass api_key if provided in kwargs
     provider_kwargs = kwargs.copy()
     
@@ -1740,7 +1749,7 @@ def extract_relations_llm(
 
     # 2. PROVIDER VALIDATION
     try:
-        llm = create_provider(provider, model=model, **provider_kwargs)
+        llm = provider_instance or create_provider(provider, model=model, **provider_kwargs)
         if not llm.is_available():
             error_msg = f"{provider} provider not available for relation extraction (key missing?)."
             logger.error(error_msg)
@@ -1772,6 +1781,7 @@ def extract_relations_llm(
             silent_fail=silent_fail, max_text_length=max_text_length,
             max_retries=max_retries,
             extract_temporal_bounds=extract_temporal_bounds,
+            provider_instance=provider_instance,
             **kwargs
         )
 
@@ -1903,10 +1913,16 @@ Entities found in text: {entities_str}"""
             )
         # Only forward minimal, safe parameters to provider calls
         call_kwargs = {}
-        if "temperature" in kwargs:
-            call_kwargs["temperature"] = kwargs["temperature"]
-        if "verbose" in kwargs:
-            call_kwargs["verbose"] = kwargs["verbose"]
+        for key in (
+            "temperature",
+            "verbose",
+            "response_format",
+            "extra_body",
+            "reasoning_effort",
+            "fallback_to_manual",
+        ):
+            if key in kwargs:
+                call_kwargs[key] = kwargs[key]
 
         call_kwargs["max_retries"] = max_retries
 
@@ -1995,6 +2011,7 @@ Entities found in text: {entities_str}"""
                     silent_fail=silent_fail, max_text_length=new_max,
                     structured_output_mode=structured_output_mode,
                     extract_temporal_bounds=extract_temporal_bounds,
+                    provider_instance=provider_instance,
                     **kwargs
                 )
 

@@ -1905,7 +1905,14 @@ export default function App() {
         >
           <ErrorBoundary key={`enrich-${enrichView}`}>
             <Suspense fallback={<WorkspaceFallback />}>
-              {enrichView === 'import' ? <ImportExportWorkspace /> :
+              {enrichView === 'import' ? (
+                <ImportExportWorkspace
+                  onOpenGraph={() => {
+                    setActiveWorkspace('explore');
+                    setExploreView('graph');
+                  }}
+                />
+              ) :
                enrichView === 'merge' ? <DiffMergeWorkspace /> :
                enrichView === 'resolve' ? <EntityResolutionTab /> :
                <RegistryTab />}

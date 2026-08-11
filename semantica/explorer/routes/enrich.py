@@ -159,11 +159,13 @@ async def extract_entities(
     session: GraphSession = Depends(get_session),
 ):
     try:
-        from ...semantic_extract.methods import extract_entities as _extract_entities
-        from ...semantic_extract.methods import extract_relations as _extract_relations
+        from ...semantic_extract.ner_extractor import NERExtractor
+        from ...semantic_extract.relation_extractor import RelationExtractor
 
-        entities = await asyncio.to_thread(_extract_entities, body.text)
-        relations = await asyncio.to_thread(_extract_relations, body.text)
+        entity_extractor = NERExtractor(method=["ml", "pattern"])
+        entities = await asyncio.to_thread(entity_extractor.extract_entities, body.text)
+        relation_extractor = RelationExtractor(method="pattern", confidence_threshold=0.45)
+        relations = await asyncio.to_thread(relation_extractor.extract_relations, body.text, entities)
 
         ent_list = entities if isinstance(entities, list) else getattr(entities, "entities", [])
         rel_list = relations if isinstance(relations, list) else getattr(relations, "relations", [])

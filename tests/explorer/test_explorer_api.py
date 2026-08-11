@@ -1,5 +1,6 @@
 """Integration tests for the explorer API."""
 
+import io
 import json
 from pathlib import Path
 import uuid
@@ -603,6 +604,408 @@ class TestEnrichment:
     def test_extract(self, client):
         response = client.post("/api/enrich/extract", json={"text": "Alice works at Acme Corp."})
         assert response.status_code in (200, 422, 503)
+
+    def test_document_graph_preview_and_commit(self, client):
+        preview_response = client.post(
+            "/api/documents/preview",
+            files={"file": ("team.txt", b"Alice Smith works for Acme Corp.", "text/plain")},
+            data={
+                "language": "en",
+                "extraction_method": "rules",
+                "min_confidence": "0.4",
+            },
+        )
+        assert preview_response.status_code == 200
+        preview = preview_response.json()
+        assert preview["parser"] == "plain-text"
+        assert preview["language"] == "en"
+        assert {entity["text"] for entity in preview["entities"]} >= {"Alice Smith", "Acme Corp."}
+        assert any(relation["predicate"] == "works_for" for relation in preview["relations"])
+
+        commit_response = client.post(
+            "/api/documents/commit",
+            json={
+                "document_id": preview["document_id"],
+                "filename": preview["filename"],
+                "media_type": preview["media_type"],
+                "parser": preview["parser"],
+                "language": preview["language"],
+                "extraction_method": preview["extraction_method"],
+                "character_count": preview["character_count"],
+                "entities": preview["entities"],
+                "relations": preview["relations"],
+            },
+        )
+        assert commit_response.status_code == 200
+        committed = commit_response.json()
+        assert committed["nodes_added"] >= 3
+        assert committed["edges_added"] >= 3
+
+        document_response = client.get(f"/api/graph/node/{committed['document_node_id']}")
+        assert document_response.status_code == 200
+        assert document_response.json()["type"] == "DOCUMENT"
+
+        alice = next(entity for entity in preview["entities"] if entity["text"] == "Alice Smith")
+        alice_response = client.get(f"/api/graph/node/{alice['id']}")
+        assert alice_response.status_code == 200
+        assert alice_response.json()["properties"]["source_document"] == "team.txt"
+
+    def test_document_graph_preview_supports_chinese_rules(self, client):
+        text = "张伟创立星河科技有限公司。星河科技有限公司位于北京市。"
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("company.txt", text.encode("utf-8"), "text/plain")},
+            data={
+                "language": "auto",
+                "extraction_method": "rules",
+                "min_confidence": "0.4",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["language"] == "zh"
+        assert {entity["text"] for entity in payload["entities"]} >= {"张伟", "星河科技有限公司", "北京市"}
+        assert {relation["predicate"] for relation in payload["relations"]} >= {"founded", "located_in"}
+
+    def test_document_graph_capabilities_report_runtime_and_ontologies(self, client):
+        response = client.get("/api/documents/capabilities")
+        assert response.status_code == 200
+        payload = response.json()
+        assert {provider["id"] for provider in payload["providers"]} >= {"openai", "ollama"}
+        deepseek = next(provider for provider in payload["providers"] if provider["id"] == "deepseek")
+        assert deepseek["default_model"] == "deepseek-v4-flash"
+        assert {"general", "business", "biomedical", "legal", "custom"} <= set(payload["ontology_profiles"])
+
+    def test_document_graph_session_credential_is_memory_only_and_clearable(self, client):
+        api_key = "sk-session-test-secret"
+        try:
+            configured = client.post(
+                "/api/documents/providers/session",
+                json={"provider": "openai", "api_key": api_key},
+            )
+            assert configured.status_code == 200
+            assert configured.json() == {
+                "provider": "openai",
+                "configured": True,
+                "scope": "process_session",
+            }
+            assert api_key not in configured.text
+            assert client.app.state.llm_session_credentials["openai"] == api_key
+
+            capabilities = client.get("/api/documents/capabilities")
+            provider = next(item for item in capabilities.json()["providers"] if item["id"] == "openai")
+            assert provider["credential_source"] == "session"
+            assert provider["session_configured"] is True
+        finally:
+            cleared = client.delete("/api/documents/providers/session/openai")
+            assert cleared.status_code == 200
+            assert "openai" not in client.app.state.llm_session_credentials
+
+    def test_document_graph_session_credential_rejects_blank_key(self, client):
+        response = client.post(
+            "/api/documents/providers/session",
+            json={"provider": "openai", "api_key": "   "},
+        )
+        assert response.status_code == 422
+
+    def test_document_graph_creates_request_scoped_deepseek_provider(self, monkeypatch):
+        from semantica.explorer.routes.documents import _create_request_provider
+
+        provider_instance = object()
+        captured = {}
+
+        def fake_create_provider(name, **kwargs):
+            captured.update(name=name, **kwargs)
+            return provider_instance
+
+        monkeypatch.setattr(
+            "semantica.semantic_extract.providers.create_provider",
+            fake_create_provider,
+        )
+        created = _create_request_provider(
+            "deepseek",
+            "deepseek-v4-flash",
+            "sk-session-test-secret",
+        )
+        assert created is provider_instance
+        assert captured == {
+            "name": "deepseek",
+            "use_pool": False,
+            "model": "deepseek-v4-flash",
+            "api_key": "sk-session-test-secret",
+            "timeout": 120.0,
+            "max_retries": 0,
+        }
+
+    def test_document_graph_retries_retryable_chunk_failure_and_reuses_provider(self, monkeypatch):
+        from semantica.explorer.routes.documents import _extract_chunk
+
+        provider_instance = object()
+        calls = []
+        retry_attempts = []
+
+        def fake_extract_entities(_text, **kwargs):
+            calls.append(kwargs)
+            if len(calls) < 3:
+                raise RuntimeError("Connection error.")
+            return []
+
+        monkeypatch.setattr(
+            "semantica.semantic_extract.methods.extract_entities_llm",
+            fake_extract_entities,
+        )
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._sleep_before_llm_retry",
+            retry_attempts.append,
+        )
+        _extract_chunk(
+            "Alice works for Acme.",
+            "en",
+            "llm",
+            0.4,
+            "deepseek",
+            "deepseek-v4-flash",
+            True,
+            provider_instance,
+            ("PERSON", "ORG"),
+            ("works_for",),
+        )
+        assert retry_attempts == [1, 2]
+        assert len(calls) == 3
+        assert all(call["provider_instance"] is provider_instance for call in calls)
+        assert all(call["max_retries"] == 1 for call in calls)
+        assert all(call["fallback_to_manual"] is False for call in calls)
+        assert all(call["response_format"] == {"type": "json_object"} for call in calls)
+        assert all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in calls)
+
+    def test_document_graph_does_not_retry_non_retryable_model_error(self, monkeypatch):
+        from semantica.explorer.routes.documents import LLMExtractionFailure, _extract_chunk
+
+        calls = 0
+
+        def fake_extract_entities(_text, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("model not found")
+
+        monkeypatch.setattr(
+            "semantica.semantic_extract.methods.extract_entities_llm",
+            fake_extract_entities,
+        )
+        with pytest.raises(LLMExtractionFailure) as caught:
+            _extract_chunk(
+                "Alice works for Acme.",
+                "en",
+                "llm",
+                0.4,
+                "deepseek",
+                "missing-model",
+                True,
+                object(),
+                ("PERSON", "ORG"),
+                ("works_for",),
+            )
+        assert calls == 1
+        assert caught.value.code == "provider_request_error"
+        assert caught.value.retryable is False
+
+    def test_document_graph_explicit_llm_fails_when_provider_is_unavailable(self, client, monkeypatch):
+        from semantica.explorer.routes.documents import ProviderCapability
+
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._provider_runtime_status",
+            lambda provider, model=None, session_api_key=None: ProviderCapability(
+                id=provider,
+                available=False,
+                default_model=model or "test-model",
+                reason="test provider unavailable",
+            ),
+        )
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("company.txt", "张伟创立星河科技有限公司。".encode(), "text/plain")},
+            data={"language": "zh", "extraction_method": "llm", "provider": "openai"},
+        )
+        assert response.status_code == 503
+        assert "unavailable" in response.json()["detail"]
+
+    def test_document_graph_reports_sanitized_retryable_chunk_error(self, client, monkeypatch):
+        from semantica.explorer.routes.documents import ProviderCapability
+
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._provider_runtime_status",
+            lambda provider, model=None, session_api_key=None: ProviderCapability(
+                id=provider,
+                available=True,
+                default_model=model or "deepseek-v4-flash",
+                reason="test provider available",
+            ),
+        )
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._create_request_provider",
+            lambda *_args: object(),
+        )
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._sleep_before_llm_retry",
+            lambda _attempt: None,
+        )
+        monkeypatch.setattr(
+            "semantica.semantic_extract.methods.extract_entities_llm",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Connection error.")),
+        )
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("company.txt", b"Alice founded Acme.", "text/plain")},
+            data={
+                "language": "en",
+                "extraction_method": "llm",
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+            },
+        )
+        assert response.status_code == 502
+        detail = response.json()["detail"]
+        assert detail == {
+            "code": "provider_connection_error",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "phase": "entity_extraction",
+            "chunk": 1,
+            "total_chunks": 1,
+            "attempts": 3,
+            "retryable": True,
+            "upstream_status": None,
+        }
+        assert "Connection error" not in response.text
+
+    def test_document_graph_auto_reports_real_fallback_method(self, client, monkeypatch):
+        from semantica.explorer.routes.documents import ProviderCapability
+
+        monkeypatch.setattr(
+            "semantica.explorer.routes.documents._provider_runtime_status",
+            lambda provider, model=None, session_api_key=None: ProviderCapability(
+                id=provider,
+                available=False,
+                default_model=model or "test-model",
+                reason="test provider unavailable",
+            ),
+        )
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("company.txt", "张伟创立星河科技有限公司。".encode(), "text/plain")},
+            data={"language": "zh", "extraction_method": "auto", "ontology_profile": "business"},
+        )
+        assert response.status_code == 200
+        execution = response.json()["execution"]
+        assert execution["requested_method"] == "auto"
+        assert execution["actual_methods"] == ["cjk-rules-v2"]
+        assert execution["fallback_used"] is True
+
+    def test_document_graph_chinese_alias_coreference_and_evidence(self, client):
+        text = "星河科技有限公司（简称星河科技）由张伟创立。该公司位于北京。"
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("company.txt", text.encode(), "text/plain")},
+            data={
+                "language": "zh",
+                "extraction_method": "rules",
+                "ontology_profile": "business",
+                "min_confidence": "0.4",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        company = next(entity for entity in payload["entities"] if entity["text"] == "星河科技有限公司")
+        assert "星河科技" in company["properties"]["aliases"]
+        relations = {relation["predicate"]: relation for relation in payload["relations"]}
+        assert {"founded", "located_in"} <= set(relations)
+        assert all(relation["context"] for relation in relations.values())
+        assert all(relation["properties"]["evidence"] for relation in relations.values())
+        assert all("confidence_breakdown" in relation["properties"] for relation in relations.values())
+
+    def test_document_graph_does_not_invent_cooccurrence_relations(self, client):
+        text = "张伟先生参加了会议，星河科技有限公司发布了报告。"
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("notes.txt", text.encode(), "text/plain")},
+            data={"language": "zh", "extraction_method": "rules", "min_confidence": "0.4"},
+        )
+        assert response.status_code == 200
+        assert response.json()["relations"] == []
+
+    def test_document_graph_offline_quality_baseline(self):
+        from semantica.explorer.document_evaluation import evaluate_file
+
+        gold_file = Path(__file__).with_name("document_extraction_gold.json")
+        report = evaluate_file(gold_file)
+        assert report["entities"]["f1"] >= 0.90, report
+        assert report["relations"]["f1"] >= 0.90, report
+
+    def test_document_graph_preview_rejects_unsupported_files(self, client):
+        response = client.post(
+            "/api/documents/preview",
+            files={"file": ("archive.zip", b"not a document", "application/zip")},
+        )
+        assert response.status_code == 422
+        assert "Unsupported document type" in response.json()["detail"]
+
+    def test_document_graph_preview_parses_docx_and_pdf(self, client):
+        from docx import Document
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        docx_document = Document()
+        docx_document.add_heading("Company profile", level=1)
+        docx_document.add_paragraph("Alice Smith works for Acme Corp.")
+        docx_buffer = io.BytesIO()
+        docx_document.save(docx_buffer)
+
+        docx_response = client.post(
+            "/api/documents/preview",
+            files={
+                "file": (
+                    "profile.docx",
+                    docx_buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            data={"language": "en", "extraction_method": "rules", "min_confidence": "0.4"},
+        )
+        assert docx_response.status_code == 200
+        assert docx_response.json()["parser"] == "python-docx"
+        assert "Alice Smith" in docx_response.json()["text_preview"]
+
+        pdf_writer = PdfWriter()
+        page = pdf_writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        font_reference = pdf_writer._add_object(font)
+        page[NameObject("/Resources")] = DictionaryObject(
+            {
+                NameObject("/Font"): DictionaryObject(
+                    {NameObject("/F1"): font_reference}
+                )
+            }
+        )
+        content_stream = DecodedStreamObject()
+        content_stream.set_data(b"BT /F1 12 Tf 72 720 Td (Alice Smith works for Acme Corp.) Tj ET")
+        page[NameObject("/Contents")] = pdf_writer._add_object(content_stream)
+        pdf_buffer = io.BytesIO()
+        pdf_writer.write(pdf_buffer)
+
+        pdf_response = client.post(
+            "/api/documents/preview",
+            files={"file": ("profile.pdf", pdf_buffer.getvalue(), "application/pdf")},
+            data={"language": "en", "extraction_method": "rules", "min_confidence": "0.4"},
+        )
+        assert pdf_response.status_code == 200
+        assert pdf_response.json()["parser"] == "pypdf"
+        assert "Alice Smith" in pdf_response.json()["text_preview"]
 
     def test_link_prediction(self, client):
         response = client.post("/api/enrich/links", json={"node_id": "python", "top_n": 5})

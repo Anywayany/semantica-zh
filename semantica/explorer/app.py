@@ -101,7 +101,12 @@ def create_app(
         app.state.ws_manager = ConnectionManager()
         app.state.session = active_session
         _install_mutation_bridge(app, active_session)
-        yield
+        try:
+            yield
+        finally:
+            # Credentials entered in the Explorer are intentionally process-session
+            # only. Drop all references when the application shuts down.
+            app.state.llm_session_credentials.clear()
 
     app = FastAPI(
         title="Semantica Knowledge Explorer",
@@ -111,6 +116,7 @@ def create_app(
     )
 
     app.state.explorer_settings = settings
+    app.state.llm_session_credentials = {}
 
     # allow_credentials lets browsers send cookies/auth headers cross-origin.
     # The Explorer has no authentication, so credentials serve no purpose and
@@ -150,6 +156,7 @@ def create_app(
     from .routes.analytics import router as analytics_router
     from .routes.annotations import router as annotations_router
     from .routes.decisions import router as decisions_router
+    from .routes.documents import router as documents_router
     from .routes.enrich import router as enrich_router
     from .routes.export_import import router as export_import_router
     from .routes.graph import router as graph_router
@@ -162,6 +169,7 @@ def create_app(
     app.include_router(graph_router)
     app.include_router(analytics_router)
     app.include_router(decisions_router)
+    app.include_router(documents_router)
     app.include_router(temporal_router)
     app.include_router(enrich_router)
     app.include_router(export_import_router)
